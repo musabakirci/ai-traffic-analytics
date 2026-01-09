@@ -1,0 +1,37 @@
+frame_sampling_fps: 2
+bucket_seconds: 60
+vehicle_class_map:
+  car: car
+  bus: bus
+  truck: truck
+  motorcycle: motorcycle
+  motorbike: motorcycle
+  bicycle: ignore
+
+detector:
+  name: dummy
+  model_path:
+  device: cpu
+  dummy:
+    mode: none
+    max_detections_per_frame: 5
+    seed: 42
+
+density:
+  low_max: 0.33
+  medium_max: 0.66
+  default_max_vehicles: 30
+  rolling_max: true
+  max_vehicles_by_camera: {}
+
+emissions:
+  factors:
+    car: 0.25
+    bus: 1.2
+    truck: 1.0
+    motorcycle: 0.1
+  sensitivity_pct: 10
+
+data_paths:
+  db_path: data/db/traffic.db
+  logs_dir: data/logs

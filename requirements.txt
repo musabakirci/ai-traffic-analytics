@@ -1,0 +1,13 @@
+numpy
+pandas
+pyyaml
+sqlalchemy>=2.0
+streamlit
+imageio
+imageio-ffmpeg
+pytest
+pytest>=7.0
+
+# Optional runtime dependencies:
+# opencv-python
+# ultralytics
