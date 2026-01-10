@@ -1,9 +1,18 @@
+# Python
 __pycache__/
 *.pyc
 .venv/
-.env
-.env.*
-/data/videos/*
-!/data/videos/.gitkeep
-/data/db/
-/data/logs/
+
+# Databases & outputs
+data/db/*.db
+data/output/
+data/logs/
+data/videos/
+
+# Models
+*.pt
+
+# OS / tooling
+.DS_Store
+Thumbs.db
+.pytest_cache/

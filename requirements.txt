@@ -7,7 +7,7 @@ imageio
 imageio-ffmpeg
 pytest
 pytest>=7.0
+ultralytics
+opencv-python
 
 # Optional runtime dependencies:
-# opencv-python
-# ultralytics

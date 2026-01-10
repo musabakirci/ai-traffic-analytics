@@ -20,8 +20,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "detector": {
         "name": "dummy",
+        "type": "dummy",
         "model_path": None,
         "device": "cpu",
+        "confidence_threshold": 0.25,
+        "conf_threshold": 0.25,
+        "visualize": False,
+        "visualize_every_n": 1,
+        "display_resize_width": None,
+        "save_annotated_video": False,
+        "annotated_output_path": None,
         "dummy": {
             "mode": "none",
             "max_detections_per_frame": 5,
@@ -63,7 +71,17 @@ class DetectorConfig:
     name: str = "dummy"
     model_path: str | None = None
     device: str = "cpu"
+    confidence_threshold: float = 0.25
+    visualize: bool = False
+    visualize_every_n: int = 1
+    display_resize_width: int | None = None
+    save_annotated_video: bool = False
+    annotated_output_path: str | None = None
     dummy: DummyConfig = field(default_factory=DummyConfig)
+
+    @property
+    def type(self) -> str:
+        return self.name
 
 
 @dataclass(frozen=True)
@@ -146,6 +164,20 @@ def validate_config(config: AppConfig) -> None:
         raise ValueError("emission factors must be >= 0")
     if config.emissions.sensitivity_pct is not None and config.emissions.sensitivity_pct < 0:
         raise ValueError("sensitivity_pct must be >= 0")
+    if not (0.0 <= config.detector.confidence_threshold <= 1.0):
+        raise ValueError("detector.confidence_threshold must be between 0 and 1")
+    if config.detector.visualize_every_n <= 0:
+        raise ValueError("detector.visualize_every_n must be > 0")
+    if config.detector.display_resize_width is not None and config.detector.display_resize_width <= 0:
+        raise ValueError("detector.display_resize_width must be > 0 when set")
+    if config.detector.save_annotated_video:
+        output_path = (config.detector.annotated_output_path or "").strip()
+        if not output_path:
+            raise ValueError(
+                "detector.annotated_output_path is required when save_annotated_video is true"
+            )
+        if not output_path.lower().endswith(".mp4"):
+            raise ValueError("detector.annotated_output_path must end with .mp4")
 
 
 def load_config(path: str) -> AppConfig:
@@ -164,9 +196,21 @@ def load_config(path: str) -> AppConfig:
             str(k).lower(): str(v) for k, v in merged.get("vehicle_class_map", {}).items()
         },
         detector=DetectorConfig(
-            name=str(detector_dict.get("name", "dummy")).lower(),
+            name=str(detector_dict.get("type", detector_dict.get("name", "dummy"))).lower(),
             model_path=detector_dict.get("model_path"),
             device=str(detector_dict.get("device", "cpu")),
+            confidence_threshold=float(
+                detector_dict.get("conf_threshold", detector_dict.get("confidence_threshold", 0.25))
+            ),
+            visualize=bool(detector_dict.get("visualize", False)),
+            visualize_every_n=int(detector_dict.get("visualize_every_n", 1)),
+            display_resize_width=(
+                int(detector_dict["display_resize_width"])
+                if detector_dict.get("display_resize_width") is not None
+                else None
+            ),
+            save_annotated_video=bool(detector_dict.get("save_annotated_video", False)),
+            annotated_output_path=detector_dict.get("annotated_output_path"),
             dummy=DummyConfig(
                 mode=str(dummy_dict.get("mode", "none")).lower(),
                 max_detections_per_frame=int(dummy_dict.get("max_detections_per_frame", 5)),

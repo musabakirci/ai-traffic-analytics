@@ -1,5 +1,6 @@
 frame_sampling_fps: 2
 bucket_seconds: 60
+
 vehicle_class_map:
   car: car
   bus: bus
@@ -8,10 +9,19 @@ vehicle_class_map:
   motorbike: motorcycle
   bicycle: ignore
 
+database:
+  url: sqlite:///./data/db/traffic.db
+
 detector:
-  name: dummy
-  model_path:
+  type: yolo
+  model_path: yolov8n.pt
   device: cpu
+  conf_threshold: 0.4
+  visualize: true
+  visualize_every_n: 2
+  display_resize_width: null
+  save_annotated_video: false
+  annotated_output_path: data/output/annotated_trafik.mp4
   dummy:
     mode: none
     max_detections_per_frame: 5
@@ -33,5 +43,4 @@ emissions:
   sensitivity_pct: 10
 
 data_paths:
-  db_path: data/db/traffic.db
   logs_dir: data/logs
