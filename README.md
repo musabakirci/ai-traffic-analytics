@@ -15,6 +15,29 @@ Video File
                     -> Streamlit Dashboard
 ```
 
+## Realtime Mode (v3)
+The realtime layer adds a WebSocket stream for live detections and rolling metrics without
+changing the offline pipeline or database flow.
+
+1. Start the realtime WebSocket server:
+   ```bash
+   uvicorn app.realtime.server:app --host 0.0.0.0 --port 8000
+   ```
+2. Enable realtime in `config.yaml`:
+   ```yaml
+   realtime:
+     enabled: true
+     websocket_url: ws://localhost:8000/ws/live
+   ```
+3. Run the pipeline (detections will emit live events):
+   ```bash
+   python -m app.pipeline.run --video data/videos/sample.mp4 --camera-id CAM_001 --config config.yaml
+   ```
+4. Launch the realtime dashboard:
+   ```bash
+   python -m app.dashboard.realtime --config config.yaml
+   ```
+
 ## Architecture & Design Decisions
 - Offline, video-based processing avoids live CCTV/MOBESE integrations and aligns with privacy constraints.
 - YOLO is optional and config-driven so CPU-only environments can run without external weights.

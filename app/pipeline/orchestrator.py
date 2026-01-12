@@ -30,6 +30,7 @@ from app.detection.factory import create_detector
 from app.emissions.factors import estimate_co2_kg
 from app.emissions.sensitivity import sensitivity_interval
 from app.ingestion.video_reader import iter_sampled_frames
+from app.realtime.client import RealtimeEventPublisher
 
 logger = logging.getLogger(__name__)
 
@@ -235,12 +236,23 @@ def run_pipeline(
         )
 
     detector = None
+    realtime_publisher = None
     aggregator = FrameAggregator(bucket_seconds=config.bucket_seconds)
 
     frames_processed = 0
     try:
+        if config.realtime.enabled:
+            realtime_publisher = RealtimeEventPublisher(
+                config.realtime.websocket_url,
+                max_width=config.detector.display_resize_width,
+                include_frames=config.realtime.send_frames,
+            )
+        realtime_emitter = realtime_publisher.publish_detections if realtime_publisher else None
         detector = create_detector(
-            config.detector, list(config.emissions.factors.keys()), config.vehicle_class_map
+            config.detector,
+            list(config.emissions.factors.keys()),
+            config.vehicle_class_map,
+            realtime_emitter=realtime_emitter,
         )
         for frame, timestamp_sec in iter_sampled_frames(str(path), config.frame_sampling_fps):
             if resume_after_sec is not None and timestamp_sec < resume_after_sec:
@@ -267,6 +279,8 @@ def run_pipeline(
     finally:
         if detector is not None and hasattr(detector, "close"):
             detector.close()
+        if realtime_publisher is not None:
+            realtime_publisher.close()
 
     try:
         if frames_processed == 0 and resume_checkpoint is None:

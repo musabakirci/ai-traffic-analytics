@@ -44,3 +44,8 @@ emissions:
 
 data_paths:
   logs_dir: data/logs
+
+realtime:
+  enabled: false
+  #websocket_url: ws://localhost:8000/ws/live
+  send_frames: false

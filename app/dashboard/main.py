@@ -7,21 +7,57 @@ import os
 import sys
 
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 from app.analytics.queries import (
     load_camera_ids,
-    load_density_distribution,
-    load_emissions_timeseries,
+    load_density,
     load_kpis,
+    load_vehicle_counts,
     load_vehicle_counts_by_class,
-    load_vehicle_timeseries,
     load_vehicle_types,
 )
 from app.common.config import load_config
 from app.db.base import get_engine
 
 logger = logging.getLogger(__name__)
+
+VEHICLE_COLORS = {
+    "car": "#1f77b4",
+    "truck": "#d62728",
+    "bus": "#ff7f0e",
+    "motorcycle": "#2ca02c",
+}
+DEFAULT_VEHICLE_COLOR = "#6c757d"
+VEHICLE_ORDER = ["car", "truck", "bus", "motorcycle"]
+
+
+def _vehicle_color(vehicle_type: str) -> str:
+    return VEHICLE_COLORS.get(vehicle_type, DEFAULT_VEHICLE_COLOR)
+
+
+def _ordered_vehicle_types(types: list[str]) -> list[str]:
+    ordered = [vehicle_type for vehicle_type in VEHICLE_ORDER if vehicle_type in types]
+    extras = sorted([vehicle_type for vehicle_type in types if vehicle_type not in ordered])
+    return ordered + extras
+
+
+def _format_delta(current: float | None, previous: float | None) -> tuple[str, str]:
+    if previous is None or previous == 0 or current is None:
+        return "—", "gray"
+    pct = ((current - previous) / previous) * 100.0
+    if pct > 0:
+        return f"▲ {abs(pct):.1f}%", "green"
+    if pct < 0:
+        return f"▼ {abs(pct):.1f}%", "red"
+    return "■ 0.0%", "gray"
+
+
+def _format_ts(value: pd.Timestamp | None) -> str:
+    if value is None:
+        return "N/A"
+    return value.strftime("%Y-%m-%d %H:%M")
 
 
 def _is_running_with_streamlit() -> bool:
@@ -112,57 +148,282 @@ def main() -> int:
         end_ts = end_dt.isoformat()
 
         kpis = load_kpis(engine, selected_cameras, start_ts, end_ts, vehicle_filter)
-        vehicle_ts = load_vehicle_timeseries(
-            engine, selected_cameras, start_ts, end_ts, vehicle_filter
-        )
+        counts_df_all = load_vehicle_counts(engine, None, start_ts, end_ts)
         counts_by_class = load_vehicle_counts_by_class(
             engine, selected_cameras, start_ts, end_ts, vehicle_filter
         )
-        emissions_ts = load_emissions_timeseries(engine, selected_cameras, start_ts, end_ts)
-        density_dist = load_density_distribution(engine, selected_cameras, start_ts, end_ts)
+        density_df = load_density(engine, None, start_ts, end_ts, None)
+        if not counts_df_all.empty and selected_cameras:
+            counts_df_all = counts_df_all[counts_df_all["camera_id"].isin(selected_cameras)]
+        counts_df_counts = counts_df_all
+        if vehicle_filter and not counts_df_counts.empty:
+            counts_df_counts = counts_df_counts[counts_df_counts["vehicle_type"] == vehicle_filter]
+        if not density_df.empty and selected_cameras:
+            density_df = density_df[density_df["camera_id"].isin(selected_cameras)]
 
-        if vehicle_ts.empty and emissions_ts.empty and density_dist.empty:
+        if counts_df_all.empty:
             st.warning("No data available for the selected filters.")
             return 0
 
         total_vehicles = kpis.get("total_vehicles") or 0
         avg_density = kpis.get("avg_density")
-        dominant_density = kpis.get("dominant_density") or "N/A"
         total_co2 = kpis.get("total_co2") or 0
 
-        col1, col2, col3, col4 = st.columns(4)
+        total_series = None
+        if not counts_df_counts.empty:
+            total_series = (
+                counts_df_counts.groupby("bucket_ts")["count"].sum().sort_index()
+            )
+        prev_total = total_series.iloc[-2] if total_series is not None and len(total_series) > 1 else None
+        curr_total = total_series.iloc[-1] if total_series is not None and len(total_series) > 0 else None
+
+        density_series = None
+        if not density_df.empty:
+            density_df = density_df.copy()
+            density_df["bucket_ts"] = pd.to_datetime(density_df["bucket_ts"], utc=True)
+            density_series = (
+                density_df.groupby("bucket_ts")["density_score"].mean().sort_index()
+            )
+        prev_density = (
+            density_series.iloc[-2] if density_series is not None and len(density_series) > 1 else None
+        )
+        curr_density = (
+            density_series.iloc[-1] if density_series is not None and len(density_series) > 0 else None
+        )
+
+        co2_series = None
+        if not counts_df_all.empty:
+            factors = config.emissions.factors
+            bucket_minutes = config.bucket_seconds / 60.0
+            co2_tmp = counts_df_all.copy()
+            co2_tmp["co2_kg"] = co2_tmp.apply(
+                lambda row: float(row["count"])
+                * float(factors.get(row["vehicle_type"], 0.0))
+                * bucket_minutes,
+                axis=1,
+            )
+            co2_series = (
+                co2_tmp.groupby("bucket_ts")["co2_kg"].sum().sort_index()
+            )
+        prev_co2 = co2_series.iloc[-2] if co2_series is not None and len(co2_series) > 1 else None
+        curr_co2 = co2_series.iloc[-1] if co2_series is not None and len(co2_series) > 0 else None
+
+        busiest_ts = None
+        if total_series is not None and not total_series.empty:
+            busiest_ts = pd.to_datetime(total_series.idxmax(), utc=True)
+        highest_co2_ts = None
+        if co2_series is not None and not co2_series.empty:
+            highest_co2_ts = pd.to_datetime(co2_series.idxmax(), utc=True)
+        dominant_vehicle = (
+            counts_by_class["vehicle_type"].iloc[0]
+            if not counts_by_class.empty
+            else "N/A"
+        )
+        st.info(
+            f"**Insight:** Busiest interval: {_format_ts(busiest_ts)} | "
+            f"Highest CO2 interval: {_format_ts(highest_co2_ts)} | "
+            f"Dominant vehicle type: {dominant_vehicle}"
+        )
+
+
+        col1, col2, col3 = st.columns(3)
         col1.metric("Total Vehicles", f"{int(total_vehicles)}")
-        col2.metric("Average Density", f"{avg_density:.2f}" if avg_density else "N/A")
-        col3.metric("Dominant Density", dominant_density)
-        col4.metric("Total CO2 (kg)", f"{float(total_co2):.2f}")
+        delta_text, delta_color = _format_delta(
+            float(curr_total) if curr_total is not None else None,
+            float(prev_total) if prev_total is not None else None,
+        )
+        col1.markdown(f":{delta_color}[{delta_text} vs previous bucket]")
+
+        col2.metric("Average Density", f"{avg_density:.2f}" if avg_density is not None else "N/A")
+        delta_text, delta_color = _format_delta(
+            float(curr_density) if curr_density is not None else None,
+            float(prev_density) if prev_density is not None else None,
+        )
+        col2.markdown(f":{delta_color}[{delta_text} vs previous bucket]")
+
+        col3.metric("Total CO2 Emissions (kg)", f"{float(total_co2):.2f}")
+        delta_text, delta_color = _format_delta(
+            float(curr_co2) if curr_co2 is not None else None,
+            float(prev_co2) if prev_co2 is not None else None,
+        )
+        col3.markdown(f":{delta_color}[{delta_text} vs previous bucket]")
 
         st.subheader("Vehicle Count Over Time")
-        if vehicle_ts.empty:
+        if counts_df_counts.empty:
             st.info("No vehicle count data available for the selected filters.")
         else:
-            vehicle_ts["bucket_ts"] = pd.to_datetime(vehicle_ts["bucket_ts"], utc=True)
-            st.line_chart(vehicle_ts, x="bucket_ts", y="total_count", use_container_width=True)
+            counts_df_counts = counts_df_counts.copy()
+            counts_df_counts["bucket_ts"] = pd.to_datetime(
+                counts_df_counts["bucket_ts"], utc=True
+            )
+            grouped = (
+                counts_df_counts.groupby(["bucket_ts", "vehicle_type"], as_index=False)["count"]
+                .sum()
+            )
+            pivot = grouped.pivot(
+                index="bucket_ts", columns="vehicle_type", values="count"
+            ).fillna(0.0)
+            pivot = pivot.sort_index()
+            ordered_types = _ordered_vehicle_types(list(pivot.columns))
+            fig_counts = go.Figure()
+            for vehicle_type in ordered_types:
+                fig_counts.add_trace(
+                    go.Scatter(
+                        x=pivot.index,
+                        y=pivot[vehicle_type],
+                        mode="lines",
+                        name=vehicle_type,
+                        line=dict(color=_vehicle_color(vehicle_type), width=2.5),
+                        meta=vehicle_type,
+                        hovertemplate=(
+                            "Vehicle: %{meta}<br>"
+                            "Time: %{x|%Y-%m-%d %H:%M}<br>"
+                            "Count: %{y:.0f}<extra></extra>"
+                        ),
+                    )
+                )
+            total_per_bucket = pivot.sum(axis=1)
+            if not total_per_bucket.empty:
+                peak_ts = total_per_bucket.idxmax()
+                peak_val = float(total_per_bucket.max())
+                fig_counts.add_annotation(
+                    x=peak_ts,
+                    y=peak_val,
+                    text="Peak traffic",
+                    showarrow=True,
+                    arrowhead=2,
+                    ax=0,
+                    ay=-40,
+                )
+            fig_counts.update_layout(
+                template="plotly_white",
+                legend_title_text="Vehicle Type",
+                xaxis_title="Time",
+                yaxis_title="Vehicles per Bucket",
+            )
+            st.plotly_chart(fig_counts, use_container_width=True)
 
-        st.subheader("Vehicle Count by Class")
+        col_left, col_right = st.columns(2)
+        col_left.subheader("Vehicle Distribution")
         if counts_by_class.empty:
-            st.info("No vehicle class data available for the selected filters.")
+            col_left.info("No vehicle class data available for the selected filters.")
         else:
-            class_chart = counts_by_class.set_index("vehicle_type")["total_count"]
-            st.bar_chart(class_chart, use_container_width=True)
+            labels = counts_by_class["vehicle_type"].tolist()
+            values = counts_by_class["total_count"].tolist()
+            colors = [_vehicle_color(label) for label in labels]
+            fig_donut = go.Figure(
+                go.Pie(
+                    labels=labels,
+                    values=values,
+                    hole=0.55,
+                    textinfo="percent+label",
+                    marker=dict(colors=colors),
+                    hovertemplate=(
+                        "Vehicle: %{label}<br>"
+                        "Share: %{percent}<br>"
+                        "Count: %{value}<extra></extra>"
+                    ),
+                )
+            )
+            fig_donut.update_layout(template="plotly_white", showlegend=False)
+            col_left.plotly_chart(fig_donut, use_container_width=True)
 
-        st.subheader("CO2 Emissions Over Time")
-        if emissions_ts.empty:
+        col_right.subheader("Traffic Density")
+        density_value = float(avg_density) if avg_density is not None else 0.0
+        fig_density = go.Figure(
+            go.Indicator(
+                mode="gauge+number",
+                value=density_value,
+                number={"valueformat": ".2f"},
+                gauge={
+                    "axis": {"range": [0, 1]},
+                    "bar": {"color": "#34495e"},
+                    "steps": [
+                        {"range": [0.0, 0.33], "color": "#2ecc71"},
+                        {"range": [0.33, 0.66], "color": "#f1c40f"},
+                        {"range": [0.66, 1.0], "color": "#e74c3c"},
+                    ],
+                },
+                title={"text": "Traffic Density"},
+            )
+        )
+        fig_density.update_layout(template="plotly_white", height=350)
+        col_right.plotly_chart(fig_density, use_container_width=True)
+        if avg_density is None:
+            col_right.caption("Density data unavailable for the selected filters.")
+        elif avg_density <= config.density.low_max:
+            col_right.caption("Traffic flowing smoothly.")
+        elif avg_density <= config.density.medium_max:
+            col_right.caption("Moderate congestion.")
+        else:
+            col_right.caption("Heavy congestion detected.")
+
+        st.subheader("CO2 Emissions by Vehicle Type")
+        if counts_df_all.empty:
             st.info("No emissions data available for the selected filters.")
         else:
-            emissions_ts["bucket_ts"] = pd.to_datetime(emissions_ts["bucket_ts"], utc=True)
-            st.area_chart(emissions_ts, x="bucket_ts", y="total_co2", use_container_width=True)
-
-        st.subheader("Density Category Distribution")
-        if density_dist.empty:
-            st.info("No density data available for the selected filters.")
-        else:
-            dist_chart = density_dist.set_index("density_level")["bucket_count"]
-            st.bar_chart(dist_chart, use_container_width=True)
+            factors = config.emissions.factors
+            bucket_minutes = config.bucket_seconds / 60.0
+            co2_df = counts_df_all.copy()
+            co2_df["bucket_ts"] = pd.to_datetime(co2_df["bucket_ts"], utc=True)
+            co2_df["co2_kg"] = co2_df.apply(
+                lambda row: float(row["count"])
+                * float(factors.get(row["vehicle_type"], 0.0))
+                * bucket_minutes,
+                axis=1,
+            )
+            co2_grouped = (
+                co2_df.groupby(["bucket_ts", "vehicle_type"], as_index=False)["co2_kg"]
+                .sum()
+            )
+            co2_pivot = co2_grouped.pivot(
+                index="bucket_ts", columns="vehicle_type", values="co2_kg"
+            ).fillna(0.0)
+            co2_pivot = co2_pivot.sort_index()
+            ordered_types = _ordered_vehicle_types(list(co2_pivot.columns))
+            total_co2_series = co2_pivot.sum(axis=1)
+            fig_co2 = go.Figure()
+            for vehicle_type in ordered_types:
+                percent = (
+                    co2_pivot[vehicle_type] / total_co2_series.replace(0.0, pd.NA)
+                ).fillna(0.0)
+                fig_co2.add_trace(
+                    go.Scatter(
+                        x=co2_pivot.index,
+                        y=co2_pivot[vehicle_type],
+                        mode="lines",
+                        stackgroup="one",
+                        name=vehicle_type,
+                        line=dict(color=_vehicle_color(vehicle_type), width=2),
+                        meta=vehicle_type,
+                        customdata=percent,
+                        hovertemplate=(
+                            "Vehicle: %{meta}<br>"
+                            "Time: %{x|%Y-%m-%d %H:%M}<br>"
+                            "CO2: %{y:.3f} kg<br>"
+                            "CO2 contribution: %{customdata:.1%}<extra></extra>"
+                        ),
+                    )
+                )
+            if not total_co2_series.empty:
+                peak_ts = total_co2_series.idxmax()
+                peak_val = float(total_co2_series.max())
+                fig_co2.add_annotation(
+                    x=peak_ts,
+                    y=peak_val,
+                    text="Highest emission interval",
+                    showarrow=True,
+                    arrowhead=2,
+                    ax=0,
+                    ay=-40,
+                )
+            fig_co2.update_layout(
+                template="plotly_white",
+                legend_title_text="Vehicle Type",
+                xaxis_title="Time",
+                yaxis_title="kg CO2",
+            )
+            st.plotly_chart(fig_co2, use_container_width=True)
 
         with st.expander("Methodology"):
             st.markdown(

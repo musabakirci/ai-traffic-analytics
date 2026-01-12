@@ -56,6 +56,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "db_path": "data/db/traffic.db",
         "logs_dir": "data/logs",
     },
+    "realtime": {
+        "enabled": False,
+        "websocket_url": "ws://localhost:8000/ws/live",
+        "send_frames": True,
+    },
 }
 
 
@@ -113,6 +118,13 @@ class DataPaths:
 
 
 @dataclass(frozen=True)
+class RealtimeConfig:
+    enabled: bool = False
+    websocket_url: str = "ws://localhost:8000/ws/live"
+    send_frames: bool = True
+
+
+@dataclass(frozen=True)
 class AppConfig:
     frame_sampling_fps: float = 2.0
     bucket_seconds: int = 60
@@ -129,6 +141,7 @@ class AppConfig:
     density: DensityConfig = field(default_factory=DensityConfig)
     emissions: EmissionsConfig = field(default_factory=EmissionsConfig)
     data_paths: DataPaths = field(default_factory=DataPaths)
+    realtime: RealtimeConfig = field(default_factory=RealtimeConfig)
 
     @property
     def db_url(self) -> str:
@@ -178,6 +191,10 @@ def validate_config(config: AppConfig) -> None:
             )
         if not output_path.lower().endswith(".mp4"):
             raise ValueError("detector.annotated_output_path must end with .mp4")
+    if config.realtime.enabled:
+        websocket_url = config.realtime.websocket_url.strip()
+        if not websocket_url:
+            raise ValueError("realtime.websocket_url is required when realtime is enabled")
 
 
 def load_config(path: str) -> AppConfig:
@@ -189,6 +206,7 @@ def load_config(path: str) -> AppConfig:
     density_dict = merged.get("density", {})
     emissions_dict = merged.get("emissions", {})
     data_paths_dict = merged.get("data_paths", {})
+    realtime_dict = merged.get("realtime", {})
     config = AppConfig(
         frame_sampling_fps=float(merged.get("frame_sampling_fps", 2.0)),
         bucket_seconds=int(merged.get("bucket_seconds", 60)),
@@ -241,6 +259,13 @@ def load_config(path: str) -> AppConfig:
         data_paths=DataPaths(
             db_path=str(data_paths_dict.get("db_path", "data/db/traffic.db")),
             logs_dir=str(data_paths_dict.get("logs_dir", "data/logs")),
+        ),
+        realtime=RealtimeConfig(
+            enabled=bool(realtime_dict.get("enabled", False)),
+            websocket_url=str(
+                realtime_dict.get("websocket_url", "ws://localhost:8000/ws/live")
+            ),
+            send_frames=bool(realtime_dict.get("send_frames", True)),
         ),
     )
     validate_config(config)

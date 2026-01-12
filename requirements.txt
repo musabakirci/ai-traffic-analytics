@@ -9,5 +9,10 @@ pytest
 pytest>=7.0
 ultralytics
 opencv-python
+fastapi
+uvicorn
+websocket-client
+plotly
+websockets
 
 # Optional runtime dependencies:
